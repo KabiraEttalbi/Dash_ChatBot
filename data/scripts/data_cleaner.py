@@ -13,6 +13,8 @@ import os
 from typing import List, Dict, Any
 from datetime import datetime
 import argparse
+import sys
+from collections import Counter  # Add this line
 
 class DataCleaner:
     """Class to clean and process arXiv data"""
@@ -112,65 +114,203 @@ class DataCleaner:
         else:
             return {'terms': [], 'primary': '', 'count': 0}
     
+    def advanced_text_cleaning(self, text: str) -> str:
+        """Advanced text cleaning with better normalization"""
+        if not text or pd.isna(text):
+            return ""
+        
+        # Remove LaTeX commands and mathematical expressions
+        text = re.sub(r'\$[^$]*\$', ' ', text)  # Remove inline math
+        text = re.sub(r'\$\$[^$]*\$\$', ' ', text)  # Remove display math
+        text = re.sub(r'\\[a-zA-Z]+\{[^}]*\}', ' ', text)  # Remove LaTeX commands
+        
+        # Remove URLs and email addresses
+        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\$$\$$,]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', ' ', text)
+        text = re.sub(r'\S+@\S+', ' ', text)
+        
+        # Remove extra whitespace and newlines
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Remove special characters but keep basic punctuation
+        text = re.sub(r'[^\w\s\.\,\;\:\!\?\-$$$$]', ' ', text)
+        
+        # Remove multiple spaces
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Remove very short words (less than 2 characters)
+        words = text.split()
+        words = [word for word in words if len(word) >= 2]
+        text = ' '.join(words)
+        
+        return text.strip()
+
+    def validate_paper_quality(self, paper: Dict) -> bool:
+        """Validate if a paper meets quality standards"""
+        # Check required fields
+        if not paper.get('title') or not paper.get('summary'):
+            return False
+        
+        # Check minimum text length
+        if len(paper['title']) < 10 or len(paper['summary']) < 50:
+            return False
+        
+        # Check if text is mostly non-English characters
+        title_ascii_ratio = sum(1 for c in paper['title'] if ord(c) < 128) / len(paper['title'])
+        summary_ascii_ratio = sum(1 for c in paper['summary'] if ord(c) < 128) / len(paper['summary'])
+        
+        if title_ascii_ratio < 0.7 or summary_ascii_ratio < 0.7:
+            return False
+        
+        return True
+
+    def extract_enhanced_keywords(self, text: str, min_length: int = 3, max_keywords: int = 30) -> List[str]:
+        """Enhanced keyword extraction with better filtering"""
+        if not text:
+            return []
+        
+        # Extended stop words list
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+            'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+            'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those',
+            'we', 'they', 'them', 'their', 'our', 'your', 'his', 'her', 'its',
+            'also', 'such', 'which', 'where', 'when', 'how', 'why', 'what', 'who',
+            'more', 'most', 'some', 'many', 'much', 'very', 'well', 'good', 'new',
+            'first', 'last', 'long', 'great', 'little', 'own', 'other', 'old', 'right',
+            'big', 'high', 'different', 'small', 'large', 'next', 'early', 'young',
+            'important', 'few', 'public', 'bad', 'same', 'able', 'show', 'shows',
+            'paper', 'study', 'research', 'work', 'method', 'approach', 'results',
+            'conclusion', 'abstract', 'introduction', 'discussion', 'analysis'
+        }
+        
+        # Extract words with better pattern matching
+        # Include hyphenated words and technical terms
+        words = re.findall(r'\b[a-zA-Z](?:[a-zA-Z\-]*[a-zA-Z])?\b', text.lower())
+        
+        # Filter words
+        filtered_words = []
+        for word in words:
+            # Skip if too short or in stop words
+            if len(word) < min_length or word in stop_words:
+                continue
+            
+            # Skip if all digits or mostly punctuation
+            if word.isdigit() or len(re.sub(r'[^a-zA-Z]', '', word)) < min_length:
+                continue
+            
+            filtered_words.append(word)
+        
+        # Count frequency and return top keywords
+        from collections import Counter
+        word_counts = Counter(filtered_words)
+        
+        # Return top keywords
+        return [word for word, count in word_counts.most_common(max_keywords)]
+
     def clean_paper(self, paper: Dict) -> Dict:
-        """Clean a single paper's data"""
+        """Enhanced paper cleaning with better data processing"""
         cleaned_paper = {}
         
-        # Basic information
+        # Basic information with enhanced cleaning
         cleaned_paper['arxiv_id'] = paper.get('arxiv_id', '')
-        cleaned_paper['title'] = self.clean_text(paper.get('title', ''))
-        cleaned_paper['summary'] = self.clean_text(paper.get('summary', ''))
+        cleaned_paper['title'] = self.advanced_text_cleaning(paper.get('title', ''))
+        cleaned_paper['summary'] = self.advanced_text_cleaning(paper.get('summary', ''))
+        
+        # Validate paper quality
+        temp_paper = {
+            'title': cleaned_paper['title'],
+            'summary': cleaned_paper['summary']
+        }
+        if not self.validate_paper_quality(temp_paper):
+            return None  # Return None for invalid papers
+        
+        # Date processing
         cleaned_paper['published'] = paper.get('published', '')
         cleaned_paper['updated'] = paper.get('updated', '')
         
-        # Process authors
+        # Extract publication year for easier filtering
+        if cleaned_paper['published']:
+            try:
+                pub_year = cleaned_paper['published'][:4]
+                cleaned_paper['publication_year'] = int(pub_year) if pub_year.isdigit() else None
+            except:
+                cleaned_paper['publication_year'] = None
+        else:
+            cleaned_paper['publication_year'] = None
+        
+        # Process authors with enhanced structure
         authors_info = self.process_authors(paper.get('authors', []))
         cleaned_paper['authors'] = authors_info
         
-        # Process categories
+        # Process categories with enhanced structure
         categories_info = self.process_categories(paper.get('categories', []))
         cleaned_paper['categories'] = categories_info
         
-        # Extract keywords from title and summary
-        title_keywords = self.extract_keywords(cleaned_paper['title'])
-        summary_keywords = self.extract_keywords(cleaned_paper['summary'])
-        cleaned_paper['keywords'] = list(set(title_keywords + summary_keywords))
+        # Enhanced keyword extraction
+        title_keywords = self.extract_enhanced_keywords(cleaned_paper['title'])
+        summary_keywords = self.extract_enhanced_keywords(cleaned_paper['summary'])
+        
+        # Combine original extracted keywords if available
+        original_keywords = paper.get('extracted_keywords', [])
+        if isinstance(original_keywords, list):
+            all_keywords = list(set(title_keywords + summary_keywords + original_keywords))
+        else:
+            all_keywords = list(set(title_keywords + summary_keywords))
+        
+        cleaned_paper['keywords'] = all_keywords[:50]  # Limit to top 50 keywords
         
         # Additional metadata
-        cleaned_paper['doi'] = paper.get('doi', '')
-        cleaned_paper['journal_ref'] = paper.get('journal_ref', '')
-        cleaned_paper['pdf_url'] = paper.get('pdf_url', '')
-        cleaned_paper['abstract_url'] = paper.get('abstract_url', '')
+        cleaned_paper['doi'] = paper.get('doi', '') or ''
+        cleaned_paper['journal_ref'] = paper.get('journal_ref', '') or ''
+        cleaned_paper['comment'] = self.clean_text(paper.get('comment', '')) or ''
+        cleaned_paper['pdf_url'] = paper.get('pdf_url', '') or ''
+        cleaned_paper['abstract_url'] = paper.get('abstract_url', '') or ''
+        
+        # Text metrics
+        cleaned_paper['title_length'] = len(cleaned_paper['title'])
+        cleaned_paper['summary_length'] = len(cleaned_paper['summary'])
+        cleaned_paper['keyword_count'] = len(cleaned_paper['keywords'])
         
         # Add processing timestamp
         cleaned_paper['processed_at'] = datetime.now().isoformat()
         
-        # Create combined text for semantic search
-        combined_text = f"{cleaned_paper['title']} {cleaned_paper['summary']}"
-        cleaned_paper['combined_text'] = combined_text
+        # Create enhanced combined text for semantic search
+        combined_parts = [cleaned_paper['title'], cleaned_paper['summary']]
+        if cleaned_paper['comment']:
+            combined_parts.append(cleaned_paper['comment'])
+        
+        cleaned_paper['combined_text'] = ' '.join(combined_parts)
+        cleaned_paper['combined_text_length'] = len(cleaned_paper['combined_text'])
         
         return cleaned_paper
     
     def clean_dataset(self, papers: List[Dict]) -> List[Dict]:
-        """Clean the entire dataset"""
+        """Enhanced dataset cleaning with better validation"""
         print(f"Cleaning {len(papers)} papers...")
         
         cleaned_papers = []
+        skipped_count = 0
+        
         for i, paper in enumerate(papers):
+            if (i + 1) % 1000 == 0:
+                print(f"Processed {i + 1}/{len(papers)} papers...")
+            
             try:
                 cleaned_paper = self.clean_paper(paper)
                 
-                # Validate required fields
-                if cleaned_paper['title'] and cleaned_paper['summary']:
+                if cleaned_paper is not None:
                     cleaned_papers.append(cleaned_paper)
                 else:
-                    print(f"Skipping paper {i+1}: Missing title or summary")
+                    skipped_count += 1
                     
             except Exception as e:
                 print(f"Error cleaning paper {i+1}: {e}")
+                skipped_count += 1
                 continue
         
         print(f"✅ Cleaned {len(cleaned_papers)} papers successfully")
+        print(f"⚠️ Skipped {skipped_count} papers due to quality issues")
         return cleaned_papers
     
     def save_cleaned_data(self, papers: List[Dict], output_file: str) -> None:
@@ -210,6 +350,95 @@ class DataCleaner:
         
         print(f"✅ Saved cleaned data to {output_file}")
     
+    def generate_enhanced_statistics(self, papers: List[Dict]) -> Dict:
+        """Generate comprehensive statistics about the cleaned dataset"""
+        if not papers:
+            return {}
+        
+        # Basic statistics
+        stats = {
+            'total_papers': len(papers),
+            'processing_date': datetime.now().isoformat(),
+        }
+        
+        # Date range analysis
+        years = [p['publication_year'] for p in papers if p.get('publication_year')]
+        if years:
+            stats['publication_years'] = {
+                'earliest': min(years),
+                'latest': max(years),
+                'range': max(years) - min(years),
+                'distribution': dict(Counter(years))
+            }
+        
+        # Category analysis
+        all_categories = []
+        primary_categories = []
+        for paper in papers:
+            categories = paper.get('categories', {}).get('terms', [])
+            all_categories.extend(categories)
+            
+            primary = paper.get('categories', {}).get('primary', '')
+            if primary:
+                primary_categories.append(primary)
+        
+        stats['categories'] = {
+            'total_unique': len(set(all_categories)),
+            'most_common': dict(Counter(all_categories).most_common(20)),
+            'primary_categories': dict(Counter(primary_categories).most_common(10))
+        }
+        
+        # Author statistics
+        all_authors = []
+        author_counts = []
+        for paper in papers:
+            authors = paper.get('authors', {}).get('names', [])
+            all_authors.extend(authors)
+            author_counts.append(len(authors))
+        
+        stats['authors'] = {
+            'total_unique_authors': len(set(all_authors)),
+            'avg_authors_per_paper': sum(author_counts) / len(author_counts) if author_counts else 0,
+            'max_authors_per_paper': max(author_counts) if author_counts else 0,
+            'min_authors_per_paper': min(author_counts) if author_counts else 0,
+            'most_prolific_authors': dict(Counter(all_authors).most_common(10))
+        }
+        
+        # Text statistics
+        title_lengths = [p['title_length'] for p in papers]
+        summary_lengths = [p['summary_length'] for p in papers]
+        keyword_counts = [p['keyword_count'] for p in papers]
+        
+        stats['text_metrics'] = {
+            'title_length': {
+                'avg': sum(title_lengths) / len(title_lengths),
+                'min': min(title_lengths),
+                'max': max(title_lengths)
+            },
+            'summary_length': {
+                'avg': sum(summary_lengths) / len(summary_lengths),
+                'min': min(summary_lengths),
+                'max': max(summary_lengths)
+            },
+            'keywords_per_paper': {
+                'avg': sum(keyword_counts) / len(keyword_counts),
+                'min': min(keyword_counts),
+                'max': max(keyword_counts)
+            }
+        }
+        
+        # Keyword analysis
+        all_keywords = []
+        for paper in papers:
+            all_keywords.extend(paper.get('keywords', []))
+        
+        stats['keywords'] = {
+            'total_unique_keywords': len(set(all_keywords)),
+            'most_common_keywords': dict(Counter(all_keywords).most_common(50))
+        }
+        
+        return stats
+
     def generate_statistics(self, papers: List[Dict]) -> Dict:
         """Generate statistics about the cleaned dataset"""
         if not papers:
@@ -249,13 +478,66 @@ class DataCleaner:
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Clean arXiv data')
-    parser.add_argument('--input', type=str, required=True, help='Input file path')
-    parser.add_argument('--output', type=str, required=True, help='Output file path')
+    parser.add_argument('--input', type=str, help='Input file path')
+    parser.add_argument('--output', type=str, help='Output file path')
     parser.add_argument('--stats', action='store_true', help='Generate statistics')
+    parser.add_argument('--auto', action='store_true', help='Auto-clean raw_data files')
     
     args = parser.parse_args()
     
     cleaner = DataCleaner()
+    
+    # If no arguments or --auto flag, use default files
+    if len(sys.argv) == 1 or args.auto:
+        print("🧹 Starting automatic data cleaning...")
+        print("📁 Input: data/data_source/raw_data.json")
+        print("📁 Output: data/processed/clean_data.json")
+        
+        input_file = 'data/data_source/raw_data.json'
+        output_file = 'data/processed/clean_data.json'
+        
+        # Check if input file exists
+        if not os.path.exists(input_file):
+            print(f"❌ Input file not found: {input_file}")
+            print("Please run the data extraction first:")
+            print("   python data/scripts/arxiv_extractor.py")
+            return
+        
+        # Load and clean data
+        print(f"Loading data from {input_file}...")
+        papers = cleaner.load_data(input_file)
+        
+        # Clean data
+        cleaned_papers = cleaner.clean_dataset(papers)
+        
+        # Save cleaned data
+        cleaner.save_cleaned_data(cleaned_papers, output_file)
+        
+        # Also save as CSV
+        csv_output = output_file.replace('.json', '.csv')
+        cleaner.save_cleaned_data(cleaned_papers, csv_output)
+        
+        # Generate statistics
+        stats = cleaner.generate_enhanced_statistics(cleaned_papers)
+        stats_file = 'data/processed/cleaning_statistics.json'
+        with open(stats_file, 'w', encoding='utf-8') as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+        print(f"✅ Statistics saved to {stats_file}")
+        
+        print(f"\n✅ Data cleaning completed!")
+        print(f"📊 Cleaned {len(cleaned_papers):,} papers")
+        print(f"📁 Files created:")
+        print(f"   - {output_file}")
+        print(f"   - {csv_output}")
+        print(f"   - {stats_file}")
+        print(f"\n🔄 Next step: Build semantic index with:")
+        print(f"   python data/scripts/semantic_indexer.py --input {output_file} --output data/search_index --test")
+        
+        return
+    
+    # Manual mode with specified files
+    if not args.input or not args.output:
+        parser.error("For manual cleaning, both --input and --output are required")
     
     # Load data
     print(f"Loading data from {args.input}...")
@@ -269,7 +551,7 @@ def main():
     
     # Generate statistics if requested
     if args.stats:
-        stats = cleaner.generate_statistics(cleaned_papers)
+        stats = cleaner.generate_enhanced_statistics(cleaned_papers)
         stats_file = args.output.replace('.json', '_stats.json').replace('.csv', '_stats.json')
         with open(stats_file, 'w', encoding='utf-8') as f:
             json.dump(stats, f, ensure_ascii=False, indent=2)
