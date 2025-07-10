@@ -15,6 +15,7 @@ from sentence_transformers import SentenceTransformer
 import faiss
 from datetime import datetime
 import argparse
+import sys
 
 class SemanticIndexer:
     """Class to create semantic embeddings and FAISS index"""
@@ -41,7 +42,7 @@ class SemanticIndexer:
         print(f"Loaded {len(papers)} papers")
         return papers
     
-    def create_embeddings(self, papers: List[Dict]) -> np.ndarray:
+    def create_embeddings(self, papers: List[Dict]) -> tuple:
         """
         Create embeddings for all papers
         
@@ -49,7 +50,7 @@ class SemanticIndexer:
             papers: List of paper dictionaries
             
         Returns:
-            Numpy array of embeddings
+            Tuple of (embeddings array, valid papers list)
         """
         print("Creating embeddings...")
         
@@ -59,6 +60,12 @@ class SemanticIndexer:
         
         for paper in papers:
             combined_text = paper.get('combined_text', '')
+            if not combined_text.strip():
+                # Fallback to title + summary if combined_text is empty
+                title = paper.get('title', '')
+                summary = paper.get('summary', '')
+                combined_text = f"{title} {summary}".strip()
+            
             if combined_text.strip():
                 texts.append(combined_text)
                 valid_papers.append(paper)
@@ -109,6 +116,8 @@ class SemanticIndexer:
         dimension = embeddings.shape[1]
         n_vectors = embeddings.shape[0]
         
+        print(f"Index parameters: {n_vectors} vectors, {dimension} dimensions")
+        
         # Choose index type based on dataset size
         if n_vectors < 1000:
             # Simple flat index for small datasets
@@ -129,6 +138,7 @@ class SemanticIndexer:
             print(f"Using IndexIVFPQ with {nlist} clusters")
         
         # Normalize embeddings for cosine similarity
+        print("Normalizing embeddings for cosine similarity...")
         faiss.normalize_L2(embeddings)
         
         # Train index if necessary
@@ -170,7 +180,11 @@ class SemanticIndexer:
             'total_papers': len(papers),
             'paper_ids': self.paper_ids,
             'created_at': datetime.now().isoformat(),
-            'index_type': type(index).__name__
+            'index_type': type(index).__name__,
+            'index_parameters': {
+                'dimension': self.model.get_sentence_embedding_dimension(),
+                'total_vectors': len(papers)
+            }
         }
         
         metadata_path = os.path.join(output_dir, "metadata.json")
@@ -291,19 +305,84 @@ class SemanticSearcher:
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Create semantic index for arXiv papers')
-    parser.add_argument('--input', type=str, required=True, help='Input cleaned papers JSON file')
-    parser.add_argument('--output', type=str, required=True, help='Output directory for index')
+    parser.add_argument('--input', type=str, help='Input cleaned papers JSON file')
+    parser.add_argument('--output', type=str, help='Output directory for index')
     parser.add_argument('--model', type=str, default='all-MiniLM-L6-v2', help='Sentence transformer model')
     parser.add_argument('--test', action='store_true', help='Test the index after creation')
+    parser.add_argument('--auto', action='store_true', help='Auto-index clean_data.json')
     
     args = parser.parse_args()
+    
+    # If no arguments or --auto flag, use default files
+    if len(sys.argv) == 1 or args.auto:
+        print("🔍 Starting automatic semantic indexing...")
+        print("📁 Input: data/processed/clean_data.json")
+        print("📁 Output: data/search_index/")
+        
+        input_file = 'data/processed/clean_data.json'
+        output_dir = 'data/search_index'
+        model_name = 'all-MiniLM-L6-v2'
+        
+        # Check if input file exists
+        if not os.path.exists(input_file):
+            print(f"❌ Input file not found: {input_file}")
+            print("Please run the data cleaning first:")
+            print("   python data/scripts/data_cleaner.py")
+            return
+        
+        # Build index
+        indexer = SemanticIndexer(model_name)
+        stats = indexer.build_complete_index(input_file, output_dir)
+        
+        print(f"\n📊 Index Statistics:")
+        print(f"   Total papers: {stats['total_papers']:,}")
+        print(f"   Embedding dimension: {stats['embedding_dimension']}")
+        print(f"   Index type: {stats['index_type']}")
+        
+        # Test search functionality
+        print("\n🔍 Testing search functionality...")
+        try:
+            searcher = SemanticSearcher(output_dir)
+            
+            test_queries = [
+                "quantum computing algorithms",
+                "machine learning neural networks",
+                "natural language processing transformers",
+                "computer vision deep learning",
+                "reinforcement learning applications"
+            ]
+            
+            for query in test_queries:
+                print(f"\nQuery: '{query}'")
+                results = searcher.search(query, k=3)
+                for i, result in enumerate(results, 1):
+                    title = result['title'][:80] + "..." if len(result['title']) > 80 else result['title']
+                    print(f"  {i}. {title} (score: {result['similarity_score']:.3f})")
+        
+        except Exception as e:
+            print(f"⚠️ Error during testing: {e}")
+        
+        print(f"\n✅ Semantic indexing completed!")
+        print(f"📁 Files created in {output_dir}/:")
+        print(f"   - faiss_index.bin (FAISS index)")
+        print(f"   - metadata.json (index metadata)")
+        print(f"   - papers_data.json (paper data)")
+        print(f"   - embeddings.npy (raw embeddings)")
+        print(f"\n🔄 Next step: Launch the chatbot with:")
+        print(f"   streamlit run app/chatbot.py")
+        
+        return
+    
+    # Manual mode with specified arguments
+    if not args.input or not args.output:
+        parser.error("For manual indexing, both --input and --output are required")
     
     # Build index
     indexer = SemanticIndexer(args.model)
     stats = indexer.build_complete_index(args.input, args.output)
     
     print(f"\n📊 Index Statistics:")
-    print(f"   Total papers: {stats['total_papers']}")
+    print(f"   Total papers: {stats['total_papers']:,}")
     print(f"   Embedding dimension: {stats['embedding_dimension']}")
     print(f"   Index type: {stats['index_type']}")
     
