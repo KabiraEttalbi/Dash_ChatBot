@@ -1,7 +1,3 @@
-Voici une version améliorée et corrigée de ton `README.md`, avec une meilleure structure, une orthographe soignée, et une formulation plus fluide tout en conservant l’ensemble des fonctionnalités et instructions :
-
----
-
 # 🔬 arXiv Scientific Papers Chatbot
 
 Ce projet propose une interface chatbot intelligente pour explorer des articles scientifiques issus de **arXiv** grâce à une recherche sémantique avancée. Il comprend un pipeline de données robuste pour l’extraction, le nettoyage et l’indexation des données, ainsi que deux applications web interactives développées avec **Streamlit** et **Dash**.
