@@ -2,6 +2,8 @@
 
 Ce projet propose une interface chatbot intelligente pour explorer des articles scientifiques issus de **arXiv** grâce à une recherche sémantique avancée. Il comprend un pipeline de données robuste pour l’extraction, le nettoyage et l’indexation des données, ainsi que deux applications web interactives développées avec **Streamlit** et **Dash**.
 
+<img width="1410" height="856" alt="Screenshot 2025-07-18 215709" src="https://github.com/user-attachments/assets/930d7220-cfa1-470c-8d36-d1919dd97e45" />
+
 ---
 
 ## ✨ Fonctionnalités
